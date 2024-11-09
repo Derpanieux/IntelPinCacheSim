@@ -25,27 +25,27 @@ using std::__1::to_string;
 // Global variables
 /* ================================================================== */
 //cache parameters
-static uintptr_t sets; //number of sets in the cache
+static uintptr_t sets;          //number of sets in the cache
 static uintptr_t associativity; //number of elements per set
-static uintptr_t blockSize; //number of bytes per block
-static uintptr_t** cache; //array to keep track of what is in cache
-static UINT64** lastAccess; //array to keep track of when each entry was last accessed
-static bool** validBits; //array to keep track of valid bits
+static uintptr_t blockSize;     //number of bytes per block
+static uintptr_t** cache;       //array to keep track of what is in cache
+static UINT64** lastAccess;     //array to keep track of when each entry was last accessed
+static bool** validBits;        //array to keep track of valid bits
 
 //logging total mem ops
-static UINT64 hitCount = 0; //number of cache hits
-static UINT64 missCount = 0; //number of cache misses
-static UINT64 accessCount = 0; //total number of mem ops
+static UINT64 hitCount = 0;     //number of cache hits
+static UINT64 missCount = 0;    //number of cache misses
+static UINT64 accessCount = 0;  //total number of mem ops
 
 //logging reads
 static UINT64 readHitCount = 0; //number of cache hits on read
-static UINT64 readMissCount = 0; //number of cache misses on read
-static UINT64 readCount = 0; //total number of reads
+static UINT64 readMissCount = 0;//number of cache misses on read
+static UINT64 readCount = 0;    //total number of reads
 
 //logging writes
-static UINT64 writeHitCount = 0; //number of cache hits on write
-static UINT64 writeMissCount = 0; //number of cache misses on write
-static UINT64 writeCount = 0; //total number of writes
+static UINT64 writeHitCount = 0;    //number of cache hits on write
+static UINT64 writeMissCount = 0;   //number of cache misses on write
+static UINT64 writeCount = 0;       //total number of writes
 
 
 
@@ -76,8 +76,10 @@ INT32 Usage()
 
     return -1;
 }
+
 //return a stringified percentage of a numerator and denominator, truncated to 2 decimal places
 string percent(UINT64 num, UINT64 denom) {
+    if (denom == 0) return "0.00%"; //prevent divide by zero
     UINT64 perTenThousand = num*10000 / denom;
     UINT64 percent = perTenThousand / 100;
     UINT64 rem = perTenThousand % 100;
@@ -97,26 +99,35 @@ string percent(UINT64 num, UINT64 denom) {
  */
 bool checkHit(void* ip, void* addr) {
     uintptr_t pointer = (uintptr_t)(addr);
-    uintptr_t cacheIndex = pointer / blockSize;
+    uintptr_t blockAddress = pointer / blockSize;
+    uintptr_t cacheIndex = blockAddress % sets;
     uintptr_t tag = cacheIndex / sets;
-    cacheIndex %= sets;
+
     //check for cache hit in every item in set
-    for(uintptr_t i = 0; i < sets; i++) {
+    for(uintptr_t i = 0; i < associativity; i++) {
         if(validBits[cacheIndex][i] && (cache[cacheIndex][i] == tag)) {
             //cache hit
             lastAccess[cacheIndex][i] = accessCount; //update most recent access
             return true;
         }
     }
-    //cache miss
+    //cache miss: Apply LRU replacement strategy
     uintptr_t mini = 0;
-    for(uintptr_t i = 1; i < sets; i++) {
-        if(lastAccess[cacheIndex][i] < lastAccess[cacheIndex][mini]) {
+    UINT64 minLastAccess = lastAccess[cacheIndex][0];
+    for(uintptr_t i = 1; i < associativity; i++) {
+        if(!validBits[cacheIndex][i]) { 
+            //if there is an invalid entry replace that one
             mini = i;
+            break;
+        }
+        if(lastAccess[cacheIndex][i] < minLastAccess) {
+            mini = i;
+            minLastAccess = lastAccess[cacheIndex][i];
         }
     }
     cache[cacheIndex][mini] = tag;
     lastAccess[cacheIndex][mini] = accessCount;
+    validBits[cacheIndex][mini] = true;
     return false;
 }
 
@@ -171,7 +182,7 @@ VOID Instruction(INS ins, VOID* v) {
             //if write, call write function
             INS_InsertPredicatedCall(ins, IPOINT_BEFORE, (AFUNPTR)onMemWrite, IARG_INST_PTR, IARG_MEMORYOP_EA, memOp, IARG_END);
         }
-        //not we cannot do if/else here because some instructions in x86 and x64 perform read and write in a signle instruction
+        //note we cannot do if/else here because some instructions in x86 and x64 perform read and write in a single instruction
     }
 }
 /*!
@@ -182,15 +193,26 @@ VOID Instruction(INS ins, VOID* v) {
  *                              PIN_AddFiniFunction function call
  */
 VOID Fini(INT32 code, VOID* v)
-{
+{   
+    //free arrays
+    for(uintptr_t i = 0; i < sets; i++) {
+        delete[] cache[i];
+        delete[] lastAccess[i];
+        delete[] validBits[i];
+    }
+    delete[] cache;
+    delete[] lastAccess;
+    delete[] validBits;
+
+    //produce output
     *out << "===============================================" << endl;
     *out << "Cache parameters" << endl;
     *out << "# of sets      : " << sets << endl;
     *out << "#-way sets     : " << associativity << endl;
     *out << "block size     : " << blockSize << endl;
-    *out << "Total hits     : " << hitCount << endl;
     *out << "===============================================" << endl;
     *out << "Cache simulation results" << endl;
+    *out << "Total hits     : " << hitCount << endl;
     *out << "Total misses   : " << missCount << endl;
     *out << "Total accesses : " << accessCount << endl;
     *out << "Total miss rate: " << percent(missCount, accessCount) << endl;
@@ -249,11 +271,16 @@ int main(int argc, char* argv[])
     PIN_AddFiniFunction(Fini, 0);
 
     cerr << "===============================================" << endl;
-    cerr << "This application is instrumented by MyPinTool" << endl;
+    cerr << "This application is running with a simulated" << endl;
+    cerr << "cache." << endl;
     if (!KnobOutputFile.Value().empty())
     {
         cerr << "See file " << KnobOutputFile.Value() << " for analysis results" << endl;
     }
+    cerr << "Cache parameters" << endl;
+    cerr << "# of sets      : " << sets << endl;
+    cerr << "#-way sets     : " << associativity << endl;
+    cerr << "block size     : " << blockSize << endl;
     cerr << "===============================================" << endl;
 
     // Start the program, never returns
