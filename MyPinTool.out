@@ -1,0 +1,20 @@
+===============================================
+Cache parameters
+# of sets      : 8192
+#-way sets     : 4
+block size     : 64
+===============================================
+Cache simulation results
+Total hits     : 50093
+Total misses   : 1247
+Total accesses : 51340
+Total miss rate: 2.42%
+Read hits      : 35705
+Read misses    : 951
+Read accesses  : 36656
+Read miss rate : 2.59%
+Write hits     : 14388
+Write misses   : 296
+Write accesses : 14684
+Write miss rate: 2.1%
+===============================================
